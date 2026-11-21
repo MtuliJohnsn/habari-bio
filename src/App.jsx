@@ -1,1149 +1,227 @@
-
-import { useEffect, useState } from 'react'
-import { supabase } from './supabase'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 
-const FREE_LINK_LIMIT = 4
+const GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search'
+const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast'
 
-function getUsernameFromPath() {
-  const path = window.location.pathname
-    .replace(/^\/+|\/+$/g, '')
-    .toLowerCase()
-
-  const reservedPaths = [
-    '',
-    'index.html',
-    'login',
-    'signup',
-    'dashboard',
-    'auth',
-  ]
-
-  if (reservedPaths.includes(path) || path.includes('/')) {
-    return ''
-  }
-
-  if (!/^[a-z0-9_]{3,30}$/.test(path)) {
-    return ''
-  }
-
-  return path
+function weatherInfo(code, isDay = 1) {
+  if (code === 0) return { label: 'Clear sky', icon: isDay ? '☀️' : '🌙' }
+  if ([1, 2].includes(code)) return { label: 'Mostly clear', icon: isDay ? '🌤️' : '☁️' }
+  if (code === 3) return { label: 'Overcast', icon: '☁️' }
+  if ([45, 48].includes(code)) return { label: 'Foggy', icon: '🌫️' }
+  if ([51, 53, 55, 56, 57].includes(code)) return { label: 'Drizzle', icon: '🌦️' }
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return { label: 'Rain', icon: '🌧️' }
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return { label: 'Snow', icon: '❄️' }
+  if ([95, 96, 99].includes(code)) return { label: 'Thunderstorm', icon: '⛈️' }
+  return { label: 'Current conditions', icon: '🌡️' }
 }
 
-function displayLinkTitle(value) {
-  const title = String(value || '').trim()
-  const embeddedUrl = title.match(/https?:\/\/[^\s]+/i)
-
-  if (embeddedUrl) {
-    try {
-      const hostname = new URL(embeddedUrl[0]).hostname.replace(/^www\./, '')
-      return hostname.split('.')[0].replace(/^./, (letter) => letter.toUpperCase())
-    } catch {
-      return 'Website'
-    }
-  }
-
-  return title || 'Your link'
+function dayName(date, index) {
+  if (index === 0) return 'Today'
+  return new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' })
 }
 
-function safeHttpUrl(value) {
-  try {
-    const parsed = new URL(value)
-
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return parsed.href
-    }
-
-    return null
-  } catch {
-    return null
-  }
+function formatHour(dateTime) {
+  return new Date(dateTime).toLocaleTimeString(undefined, { hour: 'numeric' })
 }
 
 function App() {
-  const [user, setUser] = useState(null)
-  const [view, setView] = useState('home')
-  const [mode, setMode] = useState('signup')
-
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [place, setPlace] = useState(null)
+  const [weather, setWeather] = useState(null)
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
+  const [searching, setSearching] = useState(false)
   const [error, setError] = useState('')
+  const [unit, setUnit] = useState('fahrenheit')
 
-  const [profile, setProfile] = useState({
-    username: '',
-    display_name: '',
-    bio: '',
-    avatar_url: '',
-    background_color: '#f5f0ff',
-    button_color: '#8054e8',
-  })
-
-  const [links, setLinks] = useState([])
-  const [newTitle, setNewTitle] = useState('')
-  const [newUrl, setNewUrl] = useState('')
-
-  // Public profile state
-  const [publicUsername] = useState(getUsernameFromPath)
-  const [publicProfile, setPublicProfile] = useState(null)
-  const [publicLinks, setPublicLinks] = useState([])
-  const [publicLoading, setPublicLoading] = useState(
-    () => Boolean(getUsernameFromPath())
-  )
-  const [publicNotFound, setPublicNotFound] = useState(false)
-
-  const publicProfileUrl = profile.username
-    ? `${window.location.origin}/${profile.username.trim().toLowerCase()}`
-    : ''
-
-  // Check the user's login session
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-    })
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  // Load the dashboard when a user is logged in
-  useEffect(() => {
-    if (user && !publicUsername) {
-      loadDashboard()
-    } else if (!user) {
-      setProfile({
-        username: '',
-        display_name: '',
-        bio: '',
-        avatar_url: '',
-        background_color: '#f5f0ff',
-        button_color: '#8054e8',
+  const loadWeather = useCallback(async (latitude, longitude, location) => {
+    setLoading(true)
+    setError('')
+    try {
+      const params = new URLSearchParams({
+        latitude: String(latitude),
+        longitude: String(longitude),
+        current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m',
+        hourly: 'temperature_2m,precipitation_probability,weather_code',
+        daily: 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max',
+        temperature_unit: unit,
+        wind_speed_unit: 'mph',
+        precipitation_unit: 'inch',
+        timezone: 'auto',
+        forecast_days: '7',
       })
-
-      setLinks([])
-    }
-  }, [user, publicUsername])
-
-  // Load a public profile when someone visits /username
-  useEffect(() => {
-    if (publicUsername) {
-      loadPublicProfile(publicUsername)
-    }
-  }, [publicUsername])
-
-  async function loadDashboard() {
-    setLoading(true)
-    setError('')
-
-    try {
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle()
-
-      if (profileError) throw profileError
-
-      if (profileData) {
-        setProfile({
-          username: profileData.username || '',
-          display_name: profileData.display_name || '',
-          bio: profileData.bio || '',
-          avatar_url: profileData.avatar_url || '',
-          background_color: profileData.background_color || '#f5f0ff',
-          button_color: profileData.button_color || '#8054e8',
-        })
-      }
-
-      const { data: linkData, error: linkError } = await supabase
-        .from('profile_links')
-        .select('*')
-        .eq('profile_id', user.id)
-        .order('position', { ascending: true })
-
-      if (linkError) throw linkError
-
-      setLinks(linkData || [])
+      const response = await fetch(`${WEATHER_URL}?${params}`)
+      if (!response.ok) throw new Error('Weather data is temporarily unavailable.')
+      const data = await response.json()
+      setWeather(data)
+      setPlace(location)
     } catch (err) {
-      setError(err.message || 'Could not load your profile.')
+      setError(err.message || 'Could not load weather. Please try again.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [unit])
 
-  async function loadPublicProfile(username) {
-    setPublicLoading(true)
-    setPublicNotFound(false)
-    setPublicProfile(null)
-    setPublicLinks([])
-    setError('')
-
-    try {
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('username', username.toLowerCase())
-        .maybeSingle()
-
-      if (profileError) throw profileError
-
-      if (!profileData) {
-        setPublicNotFound(true)
-        return
-      }
-
-      const { data: linkData, error: linkError } = await supabase
-        .from('profile_links')
-        .select('*')
-        .eq('profile_id', profileData.id)
-        .eq('is_active', true)
-        .order('position', { ascending: true })
-
-      if (linkError) throw linkError
-
-      setPublicProfile(profileData)
-      setPublicLinks(linkData || [])
-    } catch (err) {
-      setPublicNotFound(true)
-      setError(err.message || 'Could not load this profile.')
-    } finally {
-      setPublicLoading(false)
+  const useMyLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setError('Location is not supported by this browser. Search for a city instead.')
+      return
     }
-  }
-
-  function openAuth(selectedMode = 'signup') {
-    setMode(selectedMode)
-    setMessage('')
-    setError('')
-    setPassword('')
-    setView('auth')
-  }
-
-  async function handleAuth(event) {
-    event.preventDefault()
     setLoading(true)
-    setMessage('')
     setError('')
-
-    try {
-      if (mode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-          },
-        })
-
-        if (error) throw error
-
-        if (data.session) {
-          setMessage('Your account has been created successfully!')
-        } else {
-          setMessage(
-            'Account created! Please check your email to confirm your account.'
-          )
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
-
-        if (error) throw error
-
-        setMessage('You are now logged in!')
-      }
-    } catch (err) {
-      setError(err.message || 'Something went wrong. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handlePasswordReset() {
-    if (!email) {
-      setError('Enter your email address first.')
-      return
-    }
-
-    setLoading(true)
-    setMessage('')
-    setError('')
-
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin,
-      })
-
-      if (error) throw error
-
-      setMessage('Password reset instructions have been sent to your email.')
-    } catch (err) {
-      setError(err.message || 'Unable to send password reset email.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  function updateProfile(field, value) {
-    setProfile((current) => ({
-      ...current,
-      [field]: value,
-    }))
-  }
-
-  function addLink(event) {
-    event.preventDefault()
-    setError('')
-    setMessage('')
-
-    if (links.length >= FREE_LINK_LIMIT) {
-      setError('The free plan includes 4 links. Upgrade to Premium for more.')
-      return
-    }
-
-    const title = newTitle.trim()
-    const url = newUrl.trim()
-
-    if (!title || !url) {
-      setError('Please enter both a link title and URL.')
-      return
-    }
-
-    const safeUrl = safeHttpUrl(
-      /^https?:\/\//i.test(url) ? url : `https://${url}`
-    )
-
-    if (!safeUrl) {
-      setError('Please enter a valid website URL.')
-      return
-    }
-
-    setLinks((current) => [
-      ...current,
-      {
-        id: null,
-        title,
-        url: safeUrl,
-        icon: '🔗',
-        position: current.length,
-        is_active: true,
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => loadWeather(coords.latitude, coords.longitude, { name: 'Your location', region: 'Current location' }),
+      () => {
+        setLoading(false)
+        setError('Location permission was not granted. Search for a city to see its weather.')
       },
-    ])
-
-    setNewTitle('')
-    setNewUrl('')
-    setMessage('Link added. Remember to save your profile.')
-  }
-
-  function updateLink(index, field, value) {
-    setLinks((current) =>
-      current.map((link, i) =>
-        i === index ? { ...link, [field]: value } : link
-      )
+      { enableHighAccuracy: false, timeout: 12000, maximumAge: 300000 },
     )
-  }
+  }, [loadWeather])
 
-  async function removeLink(index) {
-    const link = links[index]
+  useEffect(() => {
+    useMyLocation()
+  }, [useMyLocation])
 
-    if (link.id) {
-      const { error } = await supabase
-        .from('profile_links')
-        .delete()
-        .eq('id', link.id)
-        .eq('profile_id', user.id)
-
-      if (error) {
-        setError(error.message)
-        return
-      }
-    }
-
-    setLinks((current) => current.filter((_, i) => i !== index))
-    setMessage('Link removed.')
-    setError('')
-  }
-
-  async function saveProfile(event) {
+  async function searchCity(event) {
     event.preventDefault()
-    setSaving(true)
-    setMessage('')
+    const city = query.trim()
+    if (!city) return
+    setSearching(true)
     setError('')
-
-    const username = profile.username.trim().toLowerCase()
-
-    if (links.length > FREE_LINK_LIMIT) {
-      setError('The free plan allows up to 4 links. Remove extra links or upgrade to Premium.')
-      setSaving(false)
-      return
-    }
-
-    if (!/^[a-z0-9_]{3,30}$/.test(username)) {
-      setError(
-        'Username must be 3–30 characters and use only letters, numbers or underscores.'
-      )
-      setSaving(false)
-      return
-    }
-
     try {
-      const profileData = {
-        id: user.id,
-        username,
-        display_name: profile.display_name.trim(),
-        bio: profile.bio.trim(),
-        avatar_url: profile.avatar_url.trim(),
-        background_color: profile.background_color,
-        button_color: profile.button_color,
-        updated_at: new Date().toISOString(),
-      }
-
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert(profileData, { onConflict: 'id' })
-
-      if (profileError) throw profileError
-
-      const savedLinks = []
-
-      for (let index = 0; index < links.length; index++) {
-        const link = links[index]
-        const safeUrl = safeHttpUrl(link.url)
-
-        if (!safeUrl) {
-          throw new Error(`Please check the URL for "${link.title}".`)
-        }
-
-        const linkData = {
-          profile_id: user.id,
-          title: link.title.trim(),
-          url: safeUrl,
-          icon: link.icon || '🔗',
-          position: index,
-          is_active: link.is_active !== false,
-        }
-
-        if (link.id) {
-          const { data, error: updateError } = await supabase
-            .from('profile_links')
-            .update(linkData)
-            .eq('id', link.id)
-            .eq('profile_id', user.id)
-            .select()
-            .single()
-
-          if (updateError) throw updateError
-          savedLinks.push(data)
-        } else {
-          const { data, error: insertError } = await supabase
-            .from('profile_links')
-            .insert(linkData)
-            .select()
-            .single()
-
-          if (insertError) throw insertError
-          savedLinks.push(data)
-        }
-      }
-
-      setLinks(savedLinks)
-      setProfile((current) => ({ ...current, username }))
-
-      setMessage(
-        `Your profile has been saved! Your public address is bio.habari.uk/${username}`
-      )
+      const response = await fetch(`${GEO_URL}?name=${encodeURIComponent(city)}&count=1&language=en&format=json`)
+      if (!response.ok) throw new Error('City search is unavailable right now.')
+      const data = await response.json()
+      const result = data.results?.[0]
+      if (!result) throw new Error('We could not find that city. Check the spelling and try again.')
+      await loadWeather(result.latitude, result.longitude, {
+        name: result.name,
+        region: [result.admin1, result.country].filter(Boolean).join(', '),
+      })
+      setQuery('')
     } catch (err) {
-      setError(err.message || 'Could not save your profile.')
+      setError(err.message || 'Could not find that city.')
     } finally {
-      setSaving(false)
+      setSearching(false)
     }
   }
 
-  async function copyProfileLink() {
-    if (!publicProfileUrl) {
-      setError('Choose a username and save your profile first.')
-      return
-    }
-
-    try {
-      await navigator.clipboard.writeText(publicProfileUrl)
-      setMessage('Your profile link has been copied. Share it anywhere!')
-      setError('')
-    } catch {
-      setMessage(`Copy this link: ${publicProfileUrl}`)
-      setError('')
-    }
-  }
-
-  async function handleLogout() {
-    const { error } = await supabase.auth.signOut()
-
-    if (error) {
-      setError(error.message)
-      return
-    }
-
-    setView('home')
-    setMessage('')
-    setError('')
-  }
+  const current = weather?.current
+  const currentInfo = current ? weatherInfo(current.weather_code, current.is_day) : null
+  const hourly = weather?.hourly
+  const daily = weather?.daily
+  const currentHour = hourly ? hourly.time.findIndex((time) => time >= current.time) : 0
+  const hourlyStart = Math.max(0, currentHour)
 
   return (
-    <div className="website">
-      <nav className="navbar">
-        <a
-          href="/"
-          className="logo"
-          onClick={(event) => {
-            event.preventDefault()
-            window.location.href = '/'
-          }}
-        >
-          HABARI<span>BIO</span>
+    <div className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="HABARI Weather home">
+          <span className="brand-mark">☀</span>
+          <span>HABARI <b>Weather</b></span>
         </a>
+        <form className="search-form" onSubmit={searchCity}>
+          <span aria-hidden="true">⌕</span>
+          <input
+            aria-label="Search city"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search city..."
+          />
+          <button type="submit" disabled={searching || !query.trim()}>
+            {searching ? 'Searching' : 'Search'}
+          </button>
+        </form>
+        <button className="location-button" onClick={useMyLocation} title="Use my location" aria-label="Use my location">◎</button>
+      </header>
 
-        {user ? (
-          <div className="nav-links">
-            <span>My Profile</span>
-            <button className="nav-button" onClick={handleLogout}>
-              Log out
-            </button>
+      <main className="main-content">
+        <div className="intro-row">
+          <div>
+            <p className="eyebrow">YOUR WEATHER, AT A GLANCE</p>
+            <h1>Weather made <span>simple.</span></h1>
           </div>
+          <div className="unit-switch" aria-label="Temperature unit">
+            <button className={unit === 'fahrenheit' ? 'selected' : ''} onClick={() => setUnit('fahrenheit')}>°F</button>
+            <button className={unit === 'celsius' ? 'selected' : ''} onClick={() => setUnit('celsius')}>°C</button>
+          </div>
+        </div>
+
+        {error && <div className="error-message" role="alert">{error}</div>}
+
+        {loading && !weather ? (
+          <section className="empty-state">
+            <div className="loading-sun">☀️</div>
+            <h2>Getting your forecast</h2>
+            <p>Just a moment while we check the sky.</p>
+          </section>
+        ) : !weather ? (
+          <section className="empty-state">
+            <div className="loading-sun">🌤️</div>
+            <h2>Find your local weather</h2>
+            <p>Allow location access or search for a city above.</p>
+            <button className="primary-button" onClick={useMyLocation}>Use my location</button>
+          </section>
         ) : (
           <>
-            <div className="nav-links">
-              {!publicUsername && (
-                <>
-                  <a href="#features">Features</a>
-                  <a href="#examples">Examples</a>
-                  <a href="#pricing">Pricing</a>
-                </>
-              )}
-            </div>
-
-            {!publicUsername && (
-              <button
-                className="nav-button"
-                onClick={() => openAuth('signup')}
-              >
-                Get started
-              </button>
-            )}
-          </>
-        )}
-      </nav>
-
-      {/* PUBLIC PROFILE PAGE */}
-      {publicUsername ? (
-        <main
-          style={{
-            minHeight: '80vh',
-            backgroundColor: publicProfile?.background_color || '#f5f0ff',
-            padding: '55px 20px',
-            display: 'flex',
-            justifyContent: 'center',
-          }}
-        >
-          {publicLoading ? (
-            <div style={{ textAlign: 'center', padding: '50px 20px' }}>
-              <h2>Loading profile...</h2>
-            </div>
-          ) : publicNotFound || !publicProfile ? (
-            <div
-              style={{
-                textAlign: 'center',
-                maxWidth: '420px',
-                margin: '60px auto',
-              }}
-            >
-              <h1>Profile not found</h1>
-              <p>
-                We couldn't find a HABARI BIO page with the username
-                @{publicUsername}.
-              </p>
-              {error && <p className="auth-error">{error}</p>}
-              <a href="/" className="primary-button">
-                Back to HABARI BIO
-              </a>
-            </div>
-          ) : (
-            <section
-              style={{
-                width: '100%',
-                maxWidth: '460px',
-                textAlign: 'center',
-                padding: '35px 25px',
-                borderRadius: '24px',
-                backgroundColor: 'rgba(255,255,255,0.65)',
-                boxShadow: '0 15px 45px rgba(40,20,80,0.08)',
-                alignSelf: 'flex-start',
-              }}
-            >
-              {publicProfile.avatar_url &&
-              safeHttpUrl(publicProfile.avatar_url) ? (
-                <img
-                  src={safeHttpUrl(publicProfile.avatar_url)}
-                  alt={publicProfile.display_name || publicUsername}
-                  style={{
-                    width: '110px',
-                    height: '110px',
-                    objectFit: 'cover',
-                    borderRadius: '50%',
-                    margin: '0 auto 18px',
-                    display: 'block',
-                  }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: '110px',
-                    height: '110px',
-                    borderRadius: '50%',
-                    backgroundColor: publicProfile.button_color || '#8054e8',
-                    color: '#fff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '42px',
-                    fontWeight: '700',
-                    margin: '0 auto 18px',
-                  }}
-                >
-                  {(publicProfile.display_name || publicUsername)
-                    .charAt(0)
-                    .toUpperCase()}
-                </div>
-              )}
-
-              <h1 style={{ marginBottom: '6px' }}>
-                {publicProfile.display_name || publicUsername}
-              </h1>
-
-              <p style={{ opacity: 0.65, marginTop: 0 }}>
-                @{publicProfile.username}
-              </p>
-
-              {publicProfile.bio && (
-                <p
-                  style={{
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: 1.6,
-                    margin: '20px 0 25px',
-                  }}
-                >
-                  {publicProfile.bio}
-                </p>
-              )}
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
-                  marginTop: '25px',
-                }}
-              >
-                {publicLinks
-                  .filter((link) => safeHttpUrl(link.url))
-                  .map((link) => (
-                    <a
-                      key={link.id}
-                      href={safeHttpUrl(link.url)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'block',
-                        padding: '15px 20px',
-                        borderRadius: '12px',
-                        color: '#fff',
-                        backgroundColor:
-                          publicProfile.button_color || '#8054e8',
-                        textDecoration: 'none',
-                        fontWeight: '600',
-                      }}
-                    >
-                      {link.icon && link.icon !== '🔗'
-                        ? `${link.icon} `
-                        : ''}
-                      {link.title}
-                    </a>
-                  ))}
+            <section className="current-card">
+              <div className="current-copy">
+                <p className="location-label">CURRENT WEATHER</p>
+                <h2>{place?.name}</h2>
+                <p className="region">{place?.region}</p>
+                <div className="temperature">{Math.round(current.temperature_2m)}<span>°{unit === 'fahrenheit' ? 'F' : 'C'}</span></div>
+                <p className="condition">{currentInfo.icon} {currentInfo.label}</p>
+                <p className="feels-like">Feels like {Math.round(current.apparent_temperature)}°</p>
               </div>
-
-              <div
-                style={{
-                  marginTop: '35px',
-                  fontSize: '13px',
-                  opacity: 0.65,
-                }}
-              >
-                Made with HABARI BIO
+              <div className="weather-art" aria-hidden="true">
+                <span>{currentInfo.icon}</span>
+              </div>
+              <div className="current-stats">
+                <div><span>💧</span><small>Humidity</small><strong>{current.relative_humidity_2m}%</strong></div>
+                <div><span>🌬️</span><small>Wind</small><strong>{Math.round(current.wind_speed_10m)} mph</strong></div>
+                <div><span>☔</span><small>Precipitation</small><strong>{current.precipitation} in</strong></div>
               </div>
             </section>
-          )}
-        </main>
-      ) : view === 'auth' && !user ? (
-        <main className="auth-section">
-          <div className="auth-card">
-            <div className="auth-brand-mark">H</div>
-            <span className="eyebrow">WELCOME TO HABARI BIO</span>
 
-            <h1>
-              {mode === 'signup' ? 'Create your account' : 'Welcome back'}
-            </h1>
-
-            <p className="auth-description">
-              {mode === 'signup'
-                ? 'Start building your own beautiful page.'
-                : 'Log in to manage your HABARI Bio account.'}
-            </p>
-
-            <form onSubmit={handleAuth}>
-              <label htmlFor="email">Email address</label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                required
-              />
-
-              <label htmlFor="password">Password</label>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="At least 6 characters"
-                autoComplete={
-                  mode === 'signup' ? 'new-password' : 'current-password'
-                }
-                minLength={6}
-                required
-              />
-
-              <button
-                className="primary-button auth-submit"
-                type="submit"
-                disabled={loading}
-              >
-                {loading
-                  ? 'Please wait...'
-                  : mode === 'signup'
-                    ? 'Create free account'
-                    : 'Log in'}
-              </button>
-            </form>
-
-            {mode === 'login' && (
-              <button
-                className="text-button"
-                type="button"
-                onClick={handlePasswordReset}
-                disabled={loading}
-              >
-                Forgot your password?
-              </button>
-            )}
-
-            {message && <p className="auth-message">{message}</p>}
-            {error && <p className="auth-error">{error}</p>}
-
-            <p className="auth-security-note">A simple, secure way to manage your online profile.</p>
-
-            <div className="auth-switch">
-              {mode === 'signup' ? (
-                <>
-                  Already have an account?{' '}
-                  <button onClick={() => openAuth('login')}>Log in</button>
-                </>
-              ) : (
-                <>
-                  Don't have an account?{' '}
-                  <button onClick={() => openAuth('signup')}>Sign up</button>
-                </>
-              )}
-            </div>
-
-            <button className="back-button" onClick={() => setView('home')}>
-              ← Back to homepage
-            </button>
-          </div>
-        </main>
-      ) : user ? (
-        <main className="editor-section">
-          <div className="editor-heading">
-            <span className="eyebrow">YOUR CREATOR DASHBOARD</span>
-            <h1>Build your HABARI Bio page</h1>
-            <p>Bring your online world together in one beautiful profile.</p>
-          </div>
-
-          {loading ? (
-            <div className="editor-card">
-              <p>Loading your profile...</p>
-            </div>
-          ) : (
-            <div className="editor-layout">
-              <section className="editor-card">
-                <h2>Profile information</h2>
-                <p className="editor-description">
-                  Tell visitors who you are.
-                </p>
-
-                <form onSubmit={saveProfile}>
-                  <label htmlFor="username">Username</label>
-                  <input
-                    id="username"
-                    value={profile.username}
-                    onChange={(event) =>
-                      updateProfile('username', event.target.value)
-                    }
-                    placeholder="yourname"
-                    maxLength={30}
-                    required
-                  />
-
-                  <p className="field-hint">
-                    Your profile address will be bio.habari.uk/yourname.
-                    Use 3–30 letters, numbers or underscores.
-                  </p>
-
-                  <label htmlFor="displayName">Display name</label>
-                  <input
-                    id="displayName"
-                    value={profile.display_name}
-                    onChange={(event) =>
-                      updateProfile('display_name', event.target.value)
-                    }
-                    placeholder="Your name"
-                  />
-
-                  <label htmlFor="bio">Short biography</label>
-                  <textarea
-                    id="bio"
-                    value={profile.bio}
-                    onChange={(event) =>
-                      updateProfile('bio', event.target.value)
-                    }
-                    placeholder="Tell people a little about yourself..."
-                    rows={4}
-                    maxLength={300}
-                  />
-
-                  <label htmlFor="avatarUrl">Profile image URL</label>
-                  <input
-                    id="avatarUrl"
-                    type="url"
-                    value={profile.avatar_url}
-                    onChange={(event) =>
-                      updateProfile('avatar_url', event.target.value)
-                    }
-                    placeholder="https://example.com/photo.jpg"
-                  />
-
-                  <div className="color-fields">
-                    <div>
-                      <label htmlFor="backgroundColor">Page background</label>
-                      <input
-                        id="backgroundColor"
-                        type="color"
-                        value={profile.background_color}
-                        onChange={(event) =>
-                          updateProfile('background_color', event.target.value)
-                        }
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="buttonColor">Button color</label>
-                      <input
-                        id="buttonColor"
-                        type="color"
-                        value={profile.button_color}
-                        onChange={(event) =>
-                          updateProfile('button_color', event.target.value)
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <h2 className="links-heading">Your links</h2>
-
-                  <p className="editor-description">
-                    {links.length} of {FREE_LINK_LIMIT} free links used.
-                  </p>
-
-                  {links.map((link, index) => (
-                    <div
-                      className="link-editor"
-                      key={link.id || `new-${index}`}
-                    >
-                      <label>Link title</label>
-                      <input
-                        value={link.title}
-                        onChange={(event) =>
-                          updateLink(index, 'title', event.target.value)
-                        }
-                        placeholder="Instagram"
-                        required
-                      />
-
-                      <label>Link URL</label>
-                      <input
-                        value={link.url}
-                        onChange={(event) =>
-                          updateLink(index, 'url', event.target.value)
-                        }
-                        placeholder="https://instagram.com/yourname"
-                        required
-                      />
-
-                      <button
-                        type="button"
-                        className="remove-link"
-                        onClick={() => removeLink(index)}
-                      >
-                        Remove link
-                      </button>
-                    </div>
-                  ))}
-
-                  {links.length < FREE_LINK_LIMIT ? (
-                    <div className="add-link-box">
-                      <h3>Add a new link</h3>
-
-                    <label htmlFor="newTitle">Button title</label>
-                    <input
-                      id="newTitle"
-                      value={newTitle}
-                      onChange={(event) => setNewTitle(event.target.value)}
-                      placeholder="My Instagram"
-                    />
-
-                    <label htmlFor="newUrl">Website address</label>
-                    <input
-                      id="newUrl"
-                      value={newUrl}
-                      onChange={(event) => setNewUrl(event.target.value)}
-                      placeholder="https://instagram.com/yourname"
-                    />
-
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={addLink}
-                    >
-                      + Add link
-                    </button>
-                    </div>
-                  ) : (
-                    <div className="upgrade-notice">
-                      <strong>You’ve reached your 4-link limit.</strong>
-                      <p>Upgrade to HABARI BIO Premium to add more links.</p>
-                      <a href="#pricing">View plans</a>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="primary-button save-button"
-                    disabled={saving}
-                  >
-                    {saving ? 'Saving...' : 'Save my profile'}
-                  </button>
-                </form>
-
-                {message && <p className="auth-message">{message}</p>}
-                {error && <p className="auth-error">{error}</p>}
-              </section>
-
-              <aside className="preview-column">
-                <h2>Live preview</h2>
-
-                <div
-                  className="live-profile"
-                  style={{ backgroundColor: profile.background_color }}
-                >
-                  {profile.avatar_url &&
-                  safeHttpUrl(profile.avatar_url) ? (
-                    <img
-                      className="live-avatar"
-                      src={safeHttpUrl(profile.avatar_url)}
-                      alt="Profile"
-                    />
-                  ) : (
-                    <div className="live-avatar-placeholder">
-                      {(profile.display_name || 'H')
-                        .charAt(0)
-                        .toUpperCase()}
-                    </div>
-                  )}
-
-                  <h3>{profile.display_name || 'Your name'}</h3>
-
-                  <p className="live-username">
-                    {profile.username ? `@${profile.username}` : '@yourname'}
-                  </p>
-
-                  <p className="live-bio">
-                    {profile.bio || 'Your biography will appear here.'}
-                  </p>
-
-                  {links
-                    .filter((link) => link.title?.trim() && safeHttpUrl(link.url))
-                    .map((link, index) => (
-                      <a
-                        key={link.id || `preview-${index}`}
-                        href={safeHttpUrl(link.url)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="live-link"
-                        style={{ backgroundColor: profile.button_color }}
-                      >
-                        {displayLinkTitle(link.title)}
-                      </a>
-                    ))}
-
-                  <div className="live-powered">Made with HABARI BIO</div>
-                </div>
-
-                <div className="share-profile-box">
-                  <h3>Your shareable profile link</h3>
-                  <p>{profile.username ? publicProfileUrl : "Choose a username to create your public link."}</p>
-                  <div className="share-profile-actions">
-                    <button type="button" className="secondary-button" onClick={copyProfileLink} disabled={!profile.username}>Copy link</button>
-                    <a className={`share-open-link${profile.username ? "" : " is-disabled"}`} href={publicProfileUrl || undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!profile.username}>Open public page ↗</a>
-                  </div>
-                </div>
-                <p className="preview-note">
-                  Preview changes here as you type. Click a button to test its destination. Save your profile before sharing so visitors can see the latest version.
-                </p>
-              </aside>
-            </div>
-          )}
-        </main>
-      ) : (
-        <main>
-          <section className="hero">
-            <div className="hero-content">
-              <span className="eyebrow">
-                YOUR DIGITAL IDENTITY, SIMPLIFIED
-              </span>
-
-              <h1>
-                Everything about you.<br />
-                <span>One simple link.</span>
-              </h1>
-
-              <p>Share your socials, websites and work with one simple link.</p>
-
-              <button
-                className="primary-button"
-                onClick={() => openAuth('signup')}
-              >
-                Create your free page →
-              </button>
-
-              <div className="hero-note">
-                Free to start · No coding required
+            <section className="forecast-section">
+              <div className="section-heading">
+                <div><p className="eyebrow">THE NEXT FEW HOURS</p><h2>Hourly forecast</h2></div>
               </div>
-            </div>
-
-            <div className="preview-area">
-              <div className="profile-card">
-                <div className="profile-cover"></div>
-                <div className="avatar">J</div>
-                <h2>John Smith</h2>
-                <p className="username">@johnsmith</p>
-
-                <p className="bio">Creator. Builder. Sharing what I do.</p>
-
-                <a href="#features" className="profile-link">
-                  📸 Instagram
-                </a>
-                <a href="#features" className="profile-link">
-                  ▶ YouTube
-                </a>
-                <a href="#features" className="profile-link">
-                  𝕏 Follow me on X
-                </a>
-                <a href="#features" className="profile-link">
-                  🌐 My Website
-                </a>
-
-                <div className="powered">Made with HABARI BIO</div>
+              <div className="hourly-list">
+                {hourly?.time.slice(hourlyStart, hourlyStart + 12).map((time, index) => {
+                  const i = hourlyStart + index
+                  const info = weatherInfo(hourly.weather_code[i])
+                  return <div className="hour-item" key={time}>
+                    <span className="hour-time">{index === 0 ? 'Now' : formatHour(time)}</span>
+                    <span className="hour-icon">{info.icon}</span>
+                    <strong>{Math.round(hourly.temperature_2m[i])}°</strong>
+                    <small>💧 {hourly.precipitation_probability[i] ?? 0}%</small>
+                  </div>
+                })}
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section id="features" className="features">
-            <span className="eyebrow">ONE PAGE. MANY POSSIBILITIES.</span>
-            <h2>Everything in one place.</h2>
-
-            <div className="feature-grid">
-              <article>
-                <span>🔗</span>
-                <h3>All your links</h3>
-                <p>
-                  Add up to 4 links on the free plan.
-                </p>
-              </article>
-
-              <article>
-                <span>🎨</span>
-                <h3>Your own style</h3>
-                <p>
-                  Make your page look like you.
-                </p>
-              </article>
-
-              <article>
-                <span>📊</span>
-                <h3>Understand your audience</h3>
-                <p>
-                  One page for all your important destinations.
-                </p>
-              </article>
-            </div>
-          </section>
-
-          <section id="examples" className="bottom-section">
-            <h2>One link. Share everywhere.</h2>
-            <p>Put your HABARI BIO link in your social profiles.</p>
-          </section>
-
-          <section id="pricing" className="bottom-section pricing">
-            <h2>Simple plans.</h2>
-            <div className="plan-grid">
-              <article className="plan-card">
-                <h3>Free</h3>
-                <p className="plan-price">$0</p>
-                <p>One profile · Up to 4 links</p>
-                <button className="primary-button" onClick={() => openAuth('signup')}>Get started</button>
-              </article>
-              <article className="plan-card premium-plan">
-                <h3>Premium</h3>
-                <p className="plan-price">Paid upgrade</p>
-                <p>More than 4 links and extra space to grow.</p>
-                <span className="plan-coming-soon">Upgrade checkout coming soon</span>
-              </article>
-            </div>
-          </section>
-        </main>
-      )}
-
-      <footer>© 2026 HABARI BIO. All rights reserved.</footer>
+            <section className="forecast-section weekly-section">
+              <div className="section-heading">
+                <div><p className="eyebrow">PLAN AHEAD</p><h2>7-day forecast</h2></div>
+              </div>
+              <div className="daily-list">
+                {daily?.time.map((date, index) => {
+                  const info = weatherInfo(daily.weather_code[index])
+                  return <div className="day-row" key={date}>
+                    <strong className="day-name">{dayName(date, index)}</strong>
+                    <span className="day-condition">{info.icon} <span>{info.label}</span></span>
+                    <div className="temperature-range"><span>{Math.round(daily.temperature_2m_min[index])}°</span><div className="range-track"><i style={{ left: '18%', width: '64%' }} /></div><b>{Math.round(daily.temperature_2m_max[index])}°</b></div>
+                  </div>
+                })}
+              </div>
+            </section>
+            <p className="attribution">Weather data provided by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>.</p>
+          </>
+        )}
+      </main>
+      <footer className="footer"><span>HABARI Weather</span><span>Clear skies ahead. ☀️</span></footer>
     </div>
   )
 }
