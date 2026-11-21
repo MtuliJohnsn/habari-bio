@@ -1,227 +1,270 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import './App.css'
 
 const GEO_URL = 'https://geocoding-api.open-meteo.com/v1/search'
 const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast'
+const today = new Date()
+const dateString = (date) => {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+const todayString = dateString(today)
+const maxForecastDate = new Date(today)
+maxForecastDate.setDate(maxForecastDate.getDate() + 15)
+const maxDateString = dateString(maxForecastDate)
 
-function weatherInfo(code, isDay = 1) {
-  if (code === 0) return { label: 'Clear sky', icon: isDay ? '☀️' : '🌙' }
-  if ([1, 2].includes(code)) return { label: 'Mostly clear', icon: isDay ? '🌤️' : '☁️' }
-  if (code === 3) return { label: 'Overcast', icon: '☁️' }
-  if ([45, 48].includes(code)) return { label: 'Foggy', icon: '🌫️' }
+function weatherInfo(code) {
+  if (code === 0) return { label: 'Clear', icon: '☀️' }
+  if ([1, 2].includes(code)) return { label: 'Partly cloudy', icon: '🌤️' }
+  if (code === 3) return { label: 'Cloudy', icon: '☁️' }
+  if ([45, 48].includes(code)) return { label: 'Fog', icon: '🌫️' }
   if ([51, 53, 55, 56, 57].includes(code)) return { label: 'Drizzle', icon: '🌦️' }
   if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return { label: 'Rain', icon: '🌧️' }
   if ([71, 73, 75, 77, 85, 86].includes(code)) return { label: 'Snow', icon: '❄️' }
   if ([95, 96, 99].includes(code)) return { label: 'Thunderstorm', icon: '⛈️' }
-  return { label: 'Current conditions', icon: '🌡️' }
+  return { label: 'Mixed conditions', icon: '🌡️' }
 }
 
-function dayName(date, index) {
-  if (index === 0) return 'Today'
-  return new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' })
+function scoreActivities(day) {
+  const code = day.weather_code
+  const rain = day.precipitation_probability_max ?? 0
+  const wind = day.wind_speed_10m_max ?? 0
+  const high = day.temperature_2m_max
+  const storm = [95, 96, 99].includes(code)
+  const wet = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 85, 86].includes(code)
+  const clamp = (value) => Math.max(1, Math.min(10, Math.round(value)))
+  return [
+    { name: 'Walking', icon: '🚶', score: clamp(9 - rain * 0.045 - wind * 0.035 - (storm ? 5 : 0)) },
+    { name: 'Running', icon: '🏃', score: clamp(9 - Math.max(0, high - 22) * 0.25 - Math.max(0, 8 - high) * 0.25 - rain * 0.055 - wind * 0.04 - (storm ? 5 : 0)) },
+    { name: 'Fishing', icon: '🎣', score: clamp(9 - rain * 0.035 - Math.max(0, wind - 15) * 0.18 - (storm ? 7 : 0)) },
+    { name: 'Beach', icon: '🏖️', score: clamp(3 + (high - 18) * 0.35 - rain * 0.06 - wind * 0.06 - (storm ? 5 : 0)) },
+    { name: 'Sightseeing', icon: '📸', score: clamp(9 - rain * 0.045 - wind * 0.025 - (storm ? 5 : 0)) },
+    { name: 'Hiking', icon: '🥾', score: clamp(9 - rain * 0.05 - wind * 0.05 - Math.max(0, high - 27) * 0.3 - (storm ? 6 : 0)) },
+  ].map((activity) => ({ ...activity, score: wet && activity.name === 'Beach' ? Math.min(activity.score, 4) : activity.score }))
 }
 
-function formatHour(dateTime) {
-  return new Date(dateTime).toLocaleTimeString(undefined, { hour: 'numeric' })
+function outfitFor(day) {
+  const high = day.temperature_2m_max
+  const low = day.temperature_2m_min
+  const rain = day.precipitation_probability_max ?? 0
+  const clothes = []
+  if (high >= 27) clothes.push('Light T-shirt and shorts')
+  else if (high >= 19) clothes.push('T-shirt with trousers or light layers')
+  else if (high >= 10) clothes.push('Sweater and long trousers')
+  else clothes.push('Warm coat and thermal layers')
+  if (low < 14) clothes.push('Bring a light jacket for the evening')
+  if (rain >= 35) clothes.push('Pack a waterproof jacket and shoes')
+  if ((day.uv_index_max ?? 0) >= 6) clothes.push('Wear a hat and UV-protective sunglasses')
+  return clothes
+}
+
+function makeChecklist(days) {
+  const list = [
+    'Travel documents and identification',
+    'Phone, charger and power bank',
+    'Wallet, payment cards and some cash',
+    'Personal medication and basic first aid',
+    'Toiletries and personal essentials',
+    'Comfortable walking shoes',
+  ]
+  if (days.some((day) => (day.precipitation_probability_max ?? 0) >= 30)) list.push('Umbrella or waterproof jacket')
+  if (days.some((day) => day.temperature_2m_max >= 26)) list.push('Light clothing, sunscreen and sunglasses')
+  if (days.some((day) => day.temperature_2m_min < 12)) list.push('Warm layers for cooler mornings and evenings')
+  if (days.some((day) => (day.uv_index_max ?? 0) >= 6)) list.push('High-SPF sunscreen and a sun hat')
+  if (days.some((day) => [71, 73, 75, 77, 85, 86].includes(day.weather_code))) list.push('Warm waterproof footwear')
+  return [...new Set(list)]
 }
 
 function App() {
-  const [place, setPlace] = useState(null)
-  const [weather, setWeather] = useState(null)
-  const [query, setQuery] = useState('')
+  const [destination, setDestination] = useState('')
+  const [startDate, setStartDate] = useState(todayString)
+  const [endDate, setEndDate] = useState(todayString)
+  const [tripType, setTripType] = useState('Holiday')
+  const [plan, setPlan] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [searching, setSearching] = useState(false)
   const [error, setError] = useState('')
-  const [unit, setUnit] = useState('fahrenheit')
+  const [checkedItems, setCheckedItems] = useState([])
 
-  const loadWeather = useCallback(async (latitude, longitude, location) => {
-    setLoading(true)
+  const tripDays = useMemo(() => {
+    if (!plan) return []
+    return plan.weather.daily.time.map((date, index) => ({
+      date,
+      weather_code: plan.weather.daily.weather_code[index],
+      temperature_2m_max: plan.weather.daily.temperature_2m_max[index],
+      temperature_2m_min: plan.weather.daily.temperature_2m_min[index],
+      precipitation_probability_max: plan.weather.daily.precipitation_probability_max?.[index] ?? 0,
+      wind_speed_10m_max: plan.weather.daily.wind_speed_10m_max?.[index] ?? 0,
+      uv_index_max: plan.weather.daily.uv_index_max?.[index] ?? 0,
+    }))
+  }, [plan])
+
+  const checklist = useMemo(() => makeChecklist(tripDays), [tripDays])
+
+  async function createPlan(event) {
+    event.preventDefault()
     setError('')
+    setPlan(null)
+    setCheckedItems([])
+    if (!destination.trim()) return setError('Enter a destination to continue.')
+    if (endDate < startDate) return setError('Your return date must be on or after your departure date.')
+    if (startDate < todayString || endDate > maxDateString) {
+      return setError('For this first version, choose dates from today through the next 16 days so we can use the weather forecast.')
+    }
+
+    setLoading(true)
     try {
+      const geoResponse = await fetch(`${GEO_URL}?name=${encodeURIComponent(destination.trim())}&count=1&language=en&format=json`)
+      if (!geoResponse.ok) throw new Error('Destination search is temporarily unavailable. Please try again.')
+      const geoData = await geoResponse.json()
+      const place = geoData.results?.[0]
+      if (!place) throw new Error('We could not find that destination. Check the spelling and try again.')
+
       const params = new URLSearchParams({
-        latitude: String(latitude),
-        longitude: String(longitude),
-        current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m',
-        hourly: 'temperature_2m,precipitation_probability,weather_code',
-        daily: 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max',
-        temperature_unit: unit,
-        wind_speed_unit: 'mph',
-        precipitation_unit: 'inch',
+        latitude: String(place.latitude),
+        longitude: String(place.longitude),
+        daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,uv_index_max',
+        temperature_unit: 'celsius',
+        wind_speed_unit: 'kmh',
         timezone: 'auto',
-        forecast_days: '7',
+        forecast_days: '16',
       })
-      const response = await fetch(`${WEATHER_URL}?${params}`)
-      if (!response.ok) throw new Error('Weather data is temporarily unavailable.')
-      const data = await response.json()
-      setWeather(data)
-      setPlace(location)
+      const weatherResponse = await fetch(`${WEATHER_URL}?${params}`)
+      if (!weatherResponse.ok) throw new Error('We could not load the forecast for this destination.')
+      const weather = await weatherResponse.json()
+      const selectedDays = weather.daily.time
+        .map((date, index) => ({ date, index }))
+        .filter(({ date }) => date >= startDate && date <= endDate)
+      if (!selectedDays.length) throw new Error('Forecast data is not available for those dates yet.')
+
+      const daily = Object.fromEntries(Object.entries(weather.daily).map(([key, values]) => [
+        key,
+        Array.isArray(values) ? selectedDays.map(({ index }) => values[index]) : values,
+      ]))
+      setPlan({
+        place: {
+          name: place.name,
+          region: [place.admin1, place.country].filter(Boolean).join(', '),
+        },
+        weather: { daily },
+        tripType,
+      })
     } catch (err) {
-      setError(err.message || 'Could not load weather. Please try again.')
+      setError(err.message || 'Something went wrong while creating your trip plan.')
     } finally {
       setLoading(false)
     }
-  }, [unit])
-
-  const useMyLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      setError('Location is not supported by this browser. Search for a city instead.')
-      return
-    }
-    setLoading(true)
-    setError('')
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => loadWeather(coords.latitude, coords.longitude, { name: 'Your location', region: 'Current location' }),
-      () => {
-        setLoading(false)
-        setError('Location permission was not granted. Search for a city to see its weather.')
-      },
-      { enableHighAccuracy: false, timeout: 12000, maximumAge: 300000 },
-    )
-  }, [loadWeather])
-
-  useEffect(() => {
-    useMyLocation()
-  }, [useMyLocation])
-
-  async function searchCity(event) {
-    event.preventDefault()
-    const city = query.trim()
-    if (!city) return
-    setSearching(true)
-    setError('')
-    try {
-      const response = await fetch(`${GEO_URL}?name=${encodeURIComponent(city)}&count=1&language=en&format=json`)
-      if (!response.ok) throw new Error('City search is unavailable right now.')
-      const data = await response.json()
-      const result = data.results?.[0]
-      if (!result) throw new Error('We could not find that city. Check the spelling and try again.')
-      await loadWeather(result.latitude, result.longitude, {
-        name: result.name,
-        region: [result.admin1, result.country].filter(Boolean).join(', '),
-      })
-      setQuery('')
-    } catch (err) {
-      setError(err.message || 'Could not find that city.')
-    } finally {
-      setSearching(false)
-    }
   }
 
-  const current = weather?.current
-  const currentInfo = current ? weatherInfo(current.weather_code, current.is_day) : null
-  const hourly = weather?.hourly
-  const daily = weather?.daily
-  const currentHour = hourly ? hourly.time.findIndex((time) => time >= current.time) : 0
-  const hourlyStart = Math.max(0, currentHour)
+  function toggleChecklist(item) {
+    setCheckedItems((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item])
+  }
+
+  const averageHigh = tripDays.length ? Math.round(tripDays.reduce((sum, day) => sum + day.temperature_2m_max, 0) / tripDays.length) : 0
+  const rainyDays = tripDays.filter((day) => day.precipitation_probability_max >= 40).length
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="/" aria-label="HABARI Weather home">
-          <span className="brand-mark">☀</span>
-          <span>HABARI <b>Weather</b></span>
+    <div className="travel-app">
+      <header className="travel-header">
+        <a className="travel-brand" href="/" aria-label="HABARI Travel Weather home">
+          <span className="travel-logo">☀</span>
+          <span>HABARI <b>Travel Weather</b></span>
         </a>
-        <form className="search-form" onSubmit={searchCity}>
-          <span aria-hidden="true">⌕</span>
-          <input
-            aria-label="Search city"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search city..."
-          />
-          <button type="submit" disabled={searching || !query.trim()}>
-            {searching ? 'Searching' : 'Search'}
-          </button>
-        </form>
-        <button className="location-button" onClick={useMyLocation} title="Use my location" aria-label="Use my location">◎</button>
+        <span className="free-label">FREE TRAVEL PLANNER</span>
       </header>
 
-      <main className="main-content">
-        <div className="intro-row">
-          <div>
-            <p className="eyebrow">YOUR WEATHER, AT A GLANCE</p>
-            <h1>Weather made <span>simple.</span></h1>
+      <main className="travel-main">
+        <section className="hero">
+          <p className="travel-eyebrow">TRAVEL SMARTER WITH THE WEATHER</p>
+          <h1>Your trip, <span>beautifully planned.</span></h1>
+          <p className="hero-description">Tell us where you are going. We will help you prepare with a destination forecast, packing checklist, daily outfit ideas and weather-based activity scores.</p>
+        </section>
+
+        <section className="planner-card">
+          <div className="planner-heading">
+            <div className="planner-icon">🧳</div>
+            <div><h2>Plan your trip</h2><p>Where would you like to go?</p></div>
           </div>
-          <div className="unit-switch" aria-label="Temperature unit">
-            <button className={unit === 'fahrenheit' ? 'selected' : ''} onClick={() => setUnit('fahrenheit')}>°F</button>
-            <button className={unit === 'celsius' ? 'selected' : ''} onClick={() => setUnit('celsius')}>°C</button>
-          </div>
-        </div>
+          <form className="trip-form" onSubmit={createPlan}>
+            <label className="field destination-field">
+              <span>DESTINATION</span>
+              <input value={destination} onChange={(event) => setDestination(event.target.value)} placeholder="e.g. Paris, France" required />
+            </label>
+            <label className="field">
+              <span>DEPARTURE</span>
+              <input type="date" value={startDate} min={todayString} max={maxDateString} onChange={(event) => { setStartDate(event.target.value); if (endDate < event.target.value) setEndDate(event.target.value) }} required />
+            </label>
+            <label className="field">
+              <span>RETURN</span>
+              <input type="date" value={endDate} min={startDate} max={maxDateString} onChange={(event) => setEndDate(event.target.value)} required />
+            </label>
+            <label className="field">
+              <span>TRIP TYPE</span>
+              <select value={tripType} onChange={(event) => setTripType(event.target.value)}>
+                <option>Holiday</option><option>Adventure</option><option>Family</option><option>Business</option><option>Outdoor</option>
+              </select>
+            </label>
+            <button className="create-plan-button" type="submit" disabled={loading}>{loading ? 'Checking forecast…' : 'Create my travel plan'} <span>→</span></button>
+          </form>
+          {error && <p className="travel-error" role="alert">{error}</p>}
+          <p className="forecast-note">Weather forecast is currently available up to 16 days ahead. Longer-range trip guidance can be added in a future version.</p>
+        </section>
 
-        {error && <div className="error-message" role="alert">{error}</div>}
-
-        {loading && !weather ? (
-          <section className="empty-state">
-            <div className="loading-sun">☀️</div>
-            <h2>Getting your forecast</h2>
-            <p>Just a moment while we check the sky.</p>
+        {!plan && (
+          <section className="feature-grid">
+            <article><span>🌦️</span><h3>Destination forecast</h3><p>See expected conditions for each day of your trip.</p></article>
+            <article><span>👕</span><h3>Daily outfit ideas</h3><p>Know what to wear based on temperature, rain and UV.</p></article>
+            <article><span>🎣</span><h3>Activity scores</h3><p>Compare outdoor activities with easy 1–10 scores.</p></article>
+            <article><span>✅</span><h3>Smart packing list</h3><p>Get a checklist tailored to the weather ahead.</p></article>
           </section>
-        ) : !weather ? (
-          <section className="empty-state">
-            <div className="loading-sun">🌤️</div>
-            <h2>Find your local weather</h2>
-            <p>Allow location access or search for a city above.</p>
-            <button className="primary-button" onClick={useMyLocation}>Use my location</button>
-          </section>
-        ) : (
-          <>
-            <section className="current-card">
-              <div className="current-copy">
-                <p className="location-label">CURRENT WEATHER</p>
-                <h2>{place?.name}</h2>
-                <p className="region">{place?.region}</p>
-                <div className="temperature">{Math.round(current.temperature_2m)}<span>°{unit === 'fahrenheit' ? 'F' : 'C'}</span></div>
-                <p className="condition">{currentInfo.icon} {currentInfo.label}</p>
-                <p className="feels-like">Feels like {Math.round(current.apparent_temperature)}°</p>
-              </div>
-              <div className="weather-art" aria-hidden="true">
-                <span>{currentInfo.icon}</span>
-              </div>
-              <div className="current-stats">
-                <div><span>💧</span><small>Humidity</small><strong>{current.relative_humidity_2m}%</strong></div>
-                <div><span>🌬️</span><small>Wind</small><strong>{Math.round(current.wind_speed_10m)} mph</strong></div>
-                <div><span>☔</span><small>Precipitation</small><strong>{current.precipitation} in</strong></div>
-              </div>
-            </section>
+        )}
 
-            <section className="forecast-section">
-              <div className="section-heading">
-                <div><p className="eyebrow">THE NEXT FEW HOURS</p><h2>Hourly forecast</h2></div>
-              </div>
-              <div className="hourly-list">
-                {hourly?.time.slice(hourlyStart, hourlyStart + 12).map((time, index) => {
-                  const i = hourlyStart + index
-                  const info = weatherInfo(hourly.weather_code[i])
-                  return <div className="hour-item" key={time}>
-                    <span className="hour-time">{index === 0 ? 'Now' : formatHour(time)}</span>
-                    <span className="hour-icon">{info.icon}</span>
-                    <strong>{Math.round(hourly.temperature_2m[i])}°</strong>
-                    <small>💧 {hourly.precipitation_probability[i] ?? 0}%</small>
-                  </div>
+        {plan && (
+          <section className="results">
+            <div className="results-title">
+              <div><p className="travel-eyebrow">YOUR PERSONAL TRIP OUTLOOK</p><h2>{plan.place.name}</h2><p>{plan.place.region} · {plan.tripType} · {tripDays.length} {tripDays.length === 1 ? 'day' : 'days'}</p></div>
+              <button className="edit-trip" onClick={() => { setPlan(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>Edit trip</button>
+            </div>
+            <div className="summary-strip">
+              <div><span>🌡️</span><small>Average high</small><strong>{averageHigh}°C</strong></div>
+              <div><span>🌧️</span><small>Rainy days</small><strong>{rainyDays} of {tripDays.length}</strong></div>
+              <div><span>📅</span><small>Travel dates</small><strong>{new Date(startDate + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – {new Date(endDate + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</strong></div>
+            </div>
+
+            <section className="result-section">
+              <div className="result-heading"><div><p className="travel-eyebrow">DAY BY DAY</p><h3>Your forecast and outfit guide</h3></div></div>
+              <div className="day-cards">
+                {tripDays.map((day) => {
+                  const info = weatherInfo(day.weather_code)
+                  return <article className="day-card" key={day.date}>
+                    <div className="day-card-top"><div><strong>{new Date(day.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long' })}</strong><small>{new Date(day.date + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></div><span className="day-weather-icon">{info.icon}</span></div>
+                    <p className="day-condition-text">{info.label}</p>
+                    <div className="day-temperatures"><strong>{Math.round(day.temperature_2m_max)}°</strong><span>{Math.round(day.temperature_2m_min)}°C low</span></div>
+                    <div className="day-facts"><span>🌧️ {day.precipitation_probability_max}% rain</span><span>💨 {Math.round(day.wind_speed_10m_max)} km/h wind</span><span>☀️ UV {Math.round(day.uv_index_max)}</span></div>
+                    <div className="outfit-tip"><b>👕 What to wear</b>{outfitFor(day).map((tip) => <span key={tip}>{tip}</span>)}</div>
+                  </article>
                 })}
               </div>
             </section>
 
-            <section className="forecast-section weekly-section">
-              <div className="section-heading">
-                <div><p className="eyebrow">PLAN AHEAD</p><h2>7-day forecast</h2></div>
-              </div>
-              <div className="daily-list">
-                {daily?.time.map((date, index) => {
-                  const info = weatherInfo(daily.weather_code[index])
-                  return <div className="day-row" key={date}>
-                    <strong className="day-name">{dayName(date, index)}</strong>
-                    <span className="day-condition">{info.icon} <span>{info.label}</span></span>
-                    <div className="temperature-range"><span>{Math.round(daily.temperature_2m_min[index])}°</span><div className="range-track"><i style={{ left: '18%', width: '64%' }} /></div><b>{Math.round(daily.temperature_2m_max[index])}°</b></div>
-                  </div>
-                })}
-              </div>
-            </section>
-            <p className="attribution">Weather data provided by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>.</p>
-          </>
+            <div className="result-columns">
+              <section className="result-section checklist-section">
+                <div className="result-heading"><div><p className="travel-eyebrow">GET READY</p><h3>Packing checklist</h3></div><span className="progress-count">{checkedItems.length}/{checklist.length}</span></div>
+                <div className="checklist">
+                  {checklist.map((item) => <label className={checkedItems.includes(item) ? 'check-item checked' : 'check-item'} key={item}><input type="checkbox" checked={checkedItems.includes(item)} onChange={() => toggleChecklist(item)} /><span>{item}</span></label>)}
+                </div>
+              </section>
+              <section className="result-section activity-section">
+                <div className="result-heading"><div><p className="travel-eyebrow">MAKE THE MOST OF IT</p><h3>Activity weather scores</h3></div></div>
+                <p className="score-explainer">Daily scores are based on forecast conditions. Higher is generally more suitable.</p>
+                {tripDays.map((day) => <div className="activity-day" key={day.date}><strong>{new Date(day.date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</strong><div className="activity-scores">{scoreActivities(day).map((activity) => <span className="activity-score" key={activity.name}><i>{activity.icon}</i>{activity.name}<b>{activity.score}/10</b></span>)}</div></div>)}
+              </section>
+            </div>
+            <div className="advisory-card"><span>💡</span><div><b>Your travel advisory</b><p>{rainyDays ? `Rain may affect ${rainyDays} day(s) of your trip. Keep a waterproof layer handy and consider indoor alternatives on wetter days. ` : 'The forecast looks relatively dry during your selected dates. '}Pack for an average high of {averageHigh}°C, and check the forecast again before departure because conditions can change.</p></div></div>
+            <p className="weather-attribution">Forecast data by <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>. Activity scores are planning guidance, not safety guarantees.</p>
+          </section>
         )}
       </main>
-      <footer className="footer"><span>HABARI Weather</span><span>Clear skies ahead. ☀️</span></footer>
+      <footer className="travel-footer"><span>HABARI Travel Weather</span><span>Plan well. Travel happy. ☀️</span></footer>
     </div>
   )
 }
