@@ -1,13 +1,13 @@
 {
   "id": "/",
-  "name": "HABARI Weather",
-  "short_name": "HABARI Weather",
-  "description": "Simple local weather and 7-day forecasts.",
+  "name": "HABARI Travel Weather",
+  "short_name": "HABARI Travel",
+  "description": "Plan smarter trips with weather forecasts, outfit ideas and packing checklists.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f5f7fb",
+  "background_color": "#f4f7fc",
   "theme_color": "#477be8",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
