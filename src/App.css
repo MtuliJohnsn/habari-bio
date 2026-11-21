@@ -955,3 +955,142 @@ a:focus-visible {
     padding-bottom: 60px;
   }
 }
+
+
+/* Clean Google-inspired account and sharing experience */
+.auth-section {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(66, 133, 244, .07), transparent 32%),
+    radial-gradient(circle at 90% 85%, rgba(52, 168, 83, .06), transparent 30%),
+    #f8faff;
+  padding-top: 52px;
+  padding-bottom: 52px;
+}
+.auth-card {
+  max-width: 460px;
+  padding: 42px 44px;
+  border: 1px solid #e6eaf0;
+  border-radius: 26px;
+  box-shadow: 0 12px 40px rgba(31, 48, 77, .07);
+}
+.auth-brand-mark {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: linear-gradient(145deg, #4285f4, #7650df);
+  color: #fff;
+  font-family: 'Manrope', sans-serif;
+  font-size: 25px;
+  font-weight: 800;
+  box-shadow: 0 7px 16px rgba(66, 133, 244, .2);
+}
+.auth-card .eyebrow {
+  color: #5f6f86;
+  letter-spacing: 1.1px;
+}
+.auth-card h1 {
+  color: #202b3c;
+  font-size: 29px;
+  letter-spacing: -.8px;
+}
+.auth-description {
+  color: #667085;
+}
+.auth-card label {
+  color: #344054;
+}
+.auth-card input {
+  min-height: 48px;
+  border-color: #d7dee8;
+  border-radius: 11px;
+}
+.auth-card input:focus {
+  border-color: #4285f4;
+  box-shadow: 0 0 0 3px rgba(66, 133, 244, .12);
+}
+.auth-submit {
+  min-height: 49px;
+  margin-top: 28px;
+  border-radius: 11px;
+  background: #1a73e8;
+  box-shadow: none;
+}
+.auth-submit:hover {
+  background: #1765cc;
+  box-shadow: none;
+}
+.auth-switch {
+  color: #667085;
+}
+.auth-switch button,
+.text-button {
+  color: #1a73e8;
+}
+.auth-security-note {
+  margin: 20px 0 0;
+  color: #98a2b3;
+  font-size: 12px;
+  text-align: center;
+}
+.share-profile-box {
+  max-width: 360px;
+  margin: 18px auto 0;
+  padding: 18px;
+  border: 1px solid #e5eaf2;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(31, 48, 77, .045);
+}
+.share-profile-box h3 {
+  margin: 0 0 8px;
+  color: #263449;
+  font-family: 'Manrope', sans-serif;
+  font-size: 15px;
+}
+.share-profile-box p {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.share-profile-actions {
+  margin-top: 13px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.share-profile-actions .secondary-button {
+  margin-top: 0;
+  border-color: #1a73e8;
+  color: #1a73e8;
+}
+.share-profile-actions .secondary-button:hover {
+  background: #f0f6ff;
+}
+.share-open-link {
+  color: #1a73e8;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.share-open-link:hover {
+  text-decoration: underline;
+}
+.share-open-link.is-disabled {
+  color: #98a2b3;
+  pointer-events: none;
+}
+.share-profile-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+@media (max-width: 500px) {
+  .auth-card {
+    padding: 32px 23px;
+  }
+}
