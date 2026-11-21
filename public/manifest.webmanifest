@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "HABARI Weather",
+  "short_name": "HABARI Weather",
+  "description": "Simple local weather and 7-day forecasts.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f7fb",
+  "theme_color": "#477be8",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
