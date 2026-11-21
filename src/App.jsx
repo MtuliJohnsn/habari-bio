@@ -28,6 +28,22 @@ function getUsernameFromPath() {
   return path
 }
 
+function displayLinkTitle(value) {
+  const title = String(value || '').trim()
+  const embeddedUrl = title.match(/https?:\/\/[^\s]+/i)
+
+  if (embeddedUrl) {
+    try {
+      const hostname = new URL(embeddedUrl[0]).hostname.replace(/^www\./, '')
+      return hostname.split('.')[0].replace(/^./, (letter) => letter.toUpperCase())
+    } catch {
+      return 'Website'
+    }
+  }
+
+  return title || 'Your link'
+}
+
 function safeHttpUrl(value) {
   try {
     const parsed = new URL(value)
@@ -940,18 +956,20 @@ function App() {
                     {profile.bio || 'Your biography will appear here.'}
                   </p>
 
-                  {links.map((link, index) => (
-                    <a
-                      key={link.id || `preview-${index}`}
-                      href={safeHttpUrl(link.url) || '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="live-link"
-                      style={{ backgroundColor: profile.button_color }}
-                    >
-                      {link.title || 'Your link'}
-                    </a>
-                  ))}
+                  {links
+                    .filter((link) => link.title?.trim() && safeHttpUrl(link.url))
+                    .map((link, index) => (
+                      <a
+                        key={link.id || `preview-${index}`}
+                        href={safeHttpUrl(link.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="live-link"
+                        style={{ backgroundColor: profile.button_color }}
+                      >
+                        {displayLinkTitle(link.title)}
+                      </a>
+                    ))}
 
                   <div className="live-powered">Made with HABARI BIO</div>
                 </div>
