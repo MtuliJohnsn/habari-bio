@@ -92,6 +92,10 @@ function App() {
   )
   const [publicNotFound, setPublicNotFound] = useState(false)
 
+  const publicProfileUrl = profile.username
+    ? `${window.location.origin}/${profile.username.trim().toLowerCase()}`
+    : ''
+
   // Check the user's login session
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -451,6 +455,22 @@ function App() {
     }
   }
 
+  async function copyProfileLink() {
+    if (!publicProfileUrl) {
+      setError('Choose a username and save your profile first.')
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(publicProfileUrl)
+      setMessage('Your profile link has been copied. Share it anywhere!')
+      setError('')
+    } catch {
+      setMessage(`Copy this link: ${publicProfileUrl}`)
+      setError('')
+    }
+  }
+
   async function handleLogout() {
     const { error } = await supabase.auth.signOut()
 
@@ -661,6 +681,7 @@ function App() {
       ) : view === 'auth' && !user ? (
         <main className="auth-section">
           <div className="auth-card">
+            <div className="auth-brand-mark">H</div>
             <span className="eyebrow">WELCOME TO HABARI BIO</span>
 
             <h1>
@@ -725,6 +746,8 @@ function App() {
 
             {message && <p className="auth-message">{message}</p>}
             {error && <p className="auth-error">{error}</p>}
+
+            <p className="auth-security-note">A simple, secure way to manage your online profile.</p>
 
             <div className="auth-switch">
               {mode === 'signup' ? (
@@ -974,9 +997,16 @@ function App() {
                   <div className="live-powered">Made with HABARI BIO</div>
                 </div>
 
+                <div className="share-profile-box">
+                  <h3>Your shareable profile link</h3>
+                  <p>{profile.username ? publicProfileUrl : "Choose a username to create your public link."}</p>
+                  <div className="share-profile-actions">
+                    <button type="button" className="secondary-button" onClick={copyProfileLink} disabled={!profile.username}>Copy link</button>
+                    <a className={`share-open-link${profile.username ? "" : " is-disabled"}`} href={publicProfileUrl || undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!profile.username}>Open public page ↗</a>
+                  </div>
+                </div>
                 <p className="preview-note">
-                  This is a preview. Save your profile to store your changes.
-                  Your public profile address will be bio.habari.uk/yourname.
+                  Preview changes here as you type. Click a button to test its destination. Save your profile before sharing so visitors can see the latest version.
                 </p>
               </aside>
             </div>
