@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { supabase } from './supabase'
 import './App.css'
 
+const FREE_LINK_LIMIT = 4
+
 function getUsernameFromPath() {
   const path = window.location.pathname
     .replace(/^\/+|\/+$/g, '')
@@ -303,6 +305,11 @@ function App() {
     setError('')
     setMessage('')
 
+    if (links.length >= FREE_LINK_LIMIT) {
+      setError('The free plan includes 4 links. Upgrade to Premium for more.')
+      return
+    }
+
     const title = newTitle.trim()
     const url = newUrl.trim()
 
@@ -373,6 +380,12 @@ function App() {
     setError('')
 
     const username = profile.username.trim().toLowerCase()
+
+    if (links.length > FREE_LINK_LIMIT) {
+      setError('The free plan allows up to 4 links. Remove extra links or upgrade to Premium.')
+      setSaving(false)
+      return
+    }
 
     if (!/^[a-z0-9_]{3,30}$/.test(username)) {
       setError(
@@ -868,7 +881,7 @@ function App() {
                   <h2 className="links-heading">Your links</h2>
 
                   <p className="editor-description">
-                    Add social media, websites and anything you want to share.
+                    {links.length} of {FREE_LINK_LIMIT} free links used.
                   </p>
 
                   {links.map((link, index) => (
@@ -906,8 +919,9 @@ function App() {
                     </div>
                   ))}
 
-                  <div className="add-link-box">
-                    <h3>Add a new link</h3>
+                  {links.length < FREE_LINK_LIMIT ? (
+                    <div className="add-link-box">
+                      <h3>Add a new link</h3>
 
                     <label htmlFor="newTitle">Button title</label>
                     <input
@@ -932,7 +946,14 @@ function App() {
                     >
                       + Add link
                     </button>
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="upgrade-notice">
+                      <strong>You’ve reached your 4-link limit.</strong>
+                      <p>Upgrade to HABARI BIO Premium to add more links.</p>
+                      <a href="#pricing">View plans</a>
+                    </div>
+                  )}
 
                   <button
                     type="submit"
@@ -1025,10 +1046,7 @@ function App() {
                 <span>One simple link.</span>
               </h1>
 
-              <p>
-                Bring all your social media, websites, projects and favorite
-                links together in one beautiful page.
-              </p>
+              <p>Share your socials, websites and work with one simple link.</p>
 
               <button
                 className="primary-button"
@@ -1049,10 +1067,7 @@ function App() {
                 <h2>John Smith</h2>
                 <p className="username">@johnsmith</p>
 
-                <p className="bio">
-                  Creator, entrepreneur and storyteller. Sharing ideas and
-                  inspiration.
-                </p>
+                <p className="bio">Creator. Builder. Sharing what I do.</p>
 
                 <a href="#features" className="profile-link">
                   📸 Instagram
@@ -1074,14 +1089,14 @@ function App() {
 
           <section id="features" className="features">
             <span className="eyebrow">ONE PAGE. MANY POSSIBILITIES.</span>
-            <h2>Your online world in one place.</h2>
+            <h2>Everything in one place.</h2>
 
             <div className="feature-grid">
               <article>
                 <span>🔗</span>
                 <h3>All your links</h3>
                 <p>
-                  Share your social media, websites and important links.
+                  Add up to 4 links on the free plan.
                 </p>
               </article>
 
@@ -1089,7 +1104,7 @@ function App() {
                 <span>🎨</span>
                 <h3>Your own style</h3>
                 <p>
-                  Build a profile that reflects your personality and brand.
+                  Make your page look like you.
                 </p>
               </article>
 
@@ -1097,27 +1112,33 @@ function App() {
                 <span>📊</span>
                 <h3>Understand your audience</h3>
                 <p>
-                  Discover how people interact with your page.
+                  One page for all your important destinations.
                 </p>
               </article>
             </div>
           </section>
 
           <section id="examples" className="bottom-section">
-            <h2>One link. Endless possibilities.</h2>
-            <p>Make it easy for people to discover everything you do.</p>
+            <h2>One link. Share everywhere.</h2>
+            <p>Put your HABARI BIO link in your social profiles.</p>
           </section>
 
           <section id="pricing" className="bottom-section pricing">
-            <h2>Start free. Grow with HABARI.</h2>
-            <p>Create your personal page without a monthly commitment.</p>
-
-            <button
-              className="primary-button"
-              onClick={() => openAuth('signup')}
-            >
-              Get started for free
-            </button>
+            <h2>Simple plans.</h2>
+            <div className="plan-grid">
+              <article className="plan-card">
+                <h3>Free</h3>
+                <p className="plan-price">$0</p>
+                <p>One profile · Up to 4 links</p>
+                <button className="primary-button" onClick={() => openAuth('signup')}>Get started</button>
+              </article>
+              <article className="plan-card premium-plan">
+                <h3>Premium</h3>
+                <p className="plan-price">Paid upgrade</p>
+                <p>More than 4 links and extra space to grow.</p>
+                <span className="plan-coming-soon">Upgrade checkout coming soon</span>
+              </article>
+            </div>
           </section>
         </main>
       )}
